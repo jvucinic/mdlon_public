@@ -12,7 +12,6 @@ from collections import Counter
 import pandas as pd
 from sklearn.manifold import TSNE
 from sklearn.neighbors import KernelDensity
-from mpl_toolkits.mplot3d import Axes3D
 import argparse
 
 
