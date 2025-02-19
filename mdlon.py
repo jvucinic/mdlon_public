@@ -83,10 +83,12 @@ get_structures = args.get_structures
 dumpcsv_fn = args.dumpcsv
 comm_file = args.plotcommunities
 
-# use mdtraj to load trajectory
 crystal = md.load(crystal_fn)
 trajectory = md.load(trajectory_fn, stride = stride, top = crystal)
 
+
+sns.set_style('whitegrid')
+sns.despine(left=True, bottom=True)
 
 def cal_rmsds(trajectory):  
     n = trajectory.n_frames
@@ -103,10 +105,10 @@ def is_neighbor(col,arr):
     return count > 0
 
 def relative_neighbors(arr):
-    y = arr.shape[1] # get the number of columns
+    y = arr.shape[1]
     has_closer_conf = np.array([is_neighbor(col,arr) for col in range(y)]).T
-    neighbors = np.logical_not(has_closer_conf) # applying not operator
-    np.fill_diagonal(neighbors,False) # I am not my own neighbor :)
+    neighbors = np.logical_not(has_closer_conf)
+    np.fill_diagonal(neighbors,False)
     return neighbors
 
 def get_energies(trajectory, energy_file):
@@ -116,27 +118,18 @@ def get_energies(trajectory, energy_file):
     ener = (ener/absmin_ener)*100 # Normalize energies so that minimum is not lower than -100
     return ener
 
-# calculate all the local minima
+
 def compute_local_min(arr_isneighbor,energy):
-    # a dictionary to store the local minima nodes name and its energy
     local_min_dic = {}
     x,y = arr_isneighbor.shape
-    #iterate each entity in the neighbor array
-    # iterate row i 
     for i in range(x):
-        # set i as local minimum first
         lm = True
-
-        # then check if i is a local minimum
         for j in range(y):
-            # if i and j are neighbors, compare the energy of i and j
             if arr_isneighbor[i,j] == True:             
-                # if j's energy is lower than i's, i is not a local min
                 if  energy[j]< energy[i]:
                     lm = False
                     break        
         if lm == True:           
-             # store the local minimum of row i
             local_min_dic[i]=energy[i]
     return local_min_dic
 
@@ -157,14 +150,13 @@ def build_neighbors_graph(rel_neigh_arr, ener):
     return g
 
 def compute_basin_node(g, i, ener):
-    basin = set() # Creating an empty set
+    basin = set()
     for n in g.neighbors(i):
         if (ener[n]>ener[i]):    
             basin.update(compute_basin_node(g,n, ener)) # Recursively add neighbors with higher energy for each neighbor with higher energy to the basin
             basin.update({n})    # Add current neighbor with higher energy to the basin 
     return basin
         
-# Calculate the basin nodes of all local minima
 def compute_basins(g, local_min, ener):  
     # Initialize a dictionary of basin for all local minima
     basins = {}
@@ -193,7 +185,7 @@ def community_intersection(dfopt, all_basins, i, j):
 def compute_probabilities(g, all_basins, local_min_list):
     min2min_probas = []
     for min1 in local_min_list:
-        min1_out_proba = []  # list of all probabilities from min1 to other local minima
+        min1_out_proba = []
         for min2 in local_min_list:
             if min1 != min2:
                min1_out_proba.append(prob_a2b(g, all_basins, min1, min2))
@@ -207,9 +199,8 @@ def compute_rep_probabilities(g, all_basins, communities, dfopt):
     point_list = list(communities['Representative'])
     partitions = list(communities['Partition'])
     for i,x in enumerate(point_list):
-        x_proba = []  # list of all probabilities from min1 to other local minima
+        x_proba = []
         for j,y in enumerate(point_list):
-            #HERE : get paths if any basins of attraction of the communities intersect
             if x != y and community_intersection(dfopt, all_basins, i, j):
                 path = g.get_shortest_paths(v = x, to = y, weights='weights', output = 'vpath')[0]
                 prob = 1
@@ -225,7 +216,7 @@ def build_lon(trajectory, rmsd_array, relneigh_g, all_basins, local_min, ener):
     print("Computing neighbors graph")
     mdlon_probas = compute_probabilities(relneigh_g, all_basins, list(local_min.keys()))
     mdlon_g =  ig.Graph.Adjacency((np.asarray(mdlon_probas) > 0).tolist(),'directed') 
-    mdlon_g.es['weights'] = [i for s in mdlon_probas for i in s if i>0] # It assigns a weight to each edge which corresponds to the probability of going from one local minimum to the other
+    mdlon_g.es['weights'] = [i for s in mdlon_probas for i in s if i>0] # Assigns a weight to each edge which corresponds to the probability of going from one local minimum to the other
     for v in mdlon_g.vs:
         edges_from_source = mdlon_g.incident(v, mode="out")
         neigh_probas = []
@@ -240,14 +231,7 @@ def build_lon(trajectory, rmsd_array, relneigh_g, all_basins, local_min, ener):
 def build_comgraph(communities, dfopt, all_basins, g):
     rep2rep_probas = compute_rep_probabilities(g, all_basins, communities, dfopt)
     rep2rep_g = ig.Graph.Adjacency((np.asarray(rep2rep_probas) > 0).tolist(),'directed') 
-    rep2rep_g.es['weights'] = [i for s in rep2rep_probas for i in s if i>0] # It assigns a weight to each edge which corresponds to the probability of going from one local minimum to the other
-    # for v in rep2rep_g.vs:
-    #     edges_from_source = rep2rep_g.incident(v, mode="out")
-    #     neigh_probas = []
-    #     for efs in edges_from_source:
-    #         neigh_probas.append(rep2rep_g.es[efs]['weights'])
-    #         normalized_probas = neigh_probas / np.sum(neigh_probas)
-    #     rep2rep_g.es[edges_from_source]['weights'] = normalized_probas
+    rep2rep_g.es['weights'] = [i for s in rep2rep_probas for i in s if i>0]
     rep2rep_g.vs['frame'] = list(communities['Representative'])
     rep2rep_g.vs['size'] = list(communities['Size'])
     return rep2rep_g
@@ -257,7 +241,7 @@ def build_comgraph(communities, dfopt, all_basins, g):
 def global_sampling(partition, lm_list, nb_frames, nb_steps = 5000): 
     visited_conf = []
     per_community_confs = [[] for _ in range(len(partition))]
-    global_lon_dict = {} # creating a dictionary with each local minimum and all its connections, without taking care of partitions
+    global_lon_dict = {}
     for v in mdlon_g.vs:
         edges_from_source = mdlon_g.incident(v, mode="out")
         global_lon_dict[v.index]=list(zip([mdlon_g.es[e].target for e in edges_from_source], mdlon_g.es[edges_from_source]['weights']))
@@ -286,7 +270,6 @@ def global_sampling(partition, lm_list, nb_frames, nb_steps = 5000):
     return df_sampling, per_community_confs
 
 def plot_sampling_histogram(fn, per_community_confs, lm_list):
-    sns.set_style('whitegrid')
     sns.set_palette("bright")
 
     flat_data = []
@@ -294,14 +277,8 @@ def plot_sampling_histogram(fn, per_community_confs, lm_list):
         for value in sublist:
             flat_data.append([lm_list[value], f'{idx+1}'])
 
-    # Convert the prepared data to a DataFrame
     df = pd.DataFrame(flat_data, columns=['Frame', 'Community'])
     histo = sns.histplot(data=df, x='Frame', hue='Community', discrete=True, binwidth=1)
-    
-    # histo = sns.histplot(per_community_confs, discrete = True, binwidth=1)
-    # histo.set(xlabel='Conformation', ylabel='Sample count')
-    # l = list(range(1,len(per_community_confs)+1))
-    # histo.legend(title = 'Community')
     sns.despine(left=True)
     ax = plt.gca()
     ax.xaxis.grid(False)
@@ -430,30 +407,32 @@ def plot_communities(fn, partition):
     aggregated_partition = partition.aggregate_partition() # one node per community
     comm_graph = aggregated_partition.graph.simplify()
     edge_list = comm_graph.get_edgelist()
-    incoming_weights = {}
+
+    all_weights = {}
     for v in comm_graph.vs:
-        incoming_weights[v.index] = 0
+        all_weights[v.index] = 0
+        
     for edge in edge_list:
         s,e = edge
         weight = aggregated_partition.weight_to_comm(s,e)
+        all_weights[s]+=weight
         comm_graph.es[comm_graph.get_eid(s,e)]['edgewidth'] = weight
-        incoming_weights[e]+=weight
-
 
     maxweight = max(comm_graph.es['edgewidth'])
     minweight = min(comm_graph.es['edgewidth'])
+    minscale = 0.2
+    maxscale = 1
     for e in comm_graph.es:
         if (maxweight-minweight != 0):
-            e['edgecolor'] = (e['edgewidth'])/(maxweight)
+            e['edgecolor'] = minscale + (e['edgewidth']-minweight) * ((maxscale-minscale)/(maxweight - minweight))
         else:
             e['edgecolor'] = 0.5
         
     for v in comm_graph.vs:
-        v['reached'] = aggregated_partition.total_weight_to_comm(v.index)  #incoming_weights[v.index]
+        v['reached'] = aggregated_partition.total_weight_to_comm(v.index) #all_weights[v.index] # switch to all_weights in order to exclude intra-community weights
     maxreached = max(comm_graph.vs['reached'])
     comm_graph.vs['reached'] = [0 if v < 0 else v/maxreached for v in comm_graph.vs['reached']]
     comm_graph.vs['labels'] = ['Community {}'.format(i) for i in range(1, len(aggregated_partition)+1)]
-    #    comm_graph.es['edgewidth'] = scipy.special.softmax(comm_graph.es['edgewidth'])
     maxweight = max(comm_graph.es['edgewidth'])
     comm_graph.es['edgewidth'] = [w/maxweight for w in comm_graph.es['edgewidth']]
     minwidth = min(comm_graph.es['edgewidth'])
@@ -462,14 +441,7 @@ def plot_communities(fn, partition):
     
     node_colors = [color_gradient(value) for value in comm_graph.vs['reached']]
     edge_colors = [color_gradient_edges(value) for value in comm_graph.es['edgecolor']]
-    # edges_to_delete = []
-    # for e in comm_graph.es:
-    #     if e['edgewidth']<0.05:
-    #         edges_to_delete.append(e)
-    # comm_graph.delete_edges(edges_to_delete)
-                              
-    bbox = BoundingBox(1200, 1200)
-    #ig.plot(comm_graph, fn, vertex_size = partition.sizes(), vertex_label = comm_graph.vs['labels'], vertex_label_dist = 2, vertex_color = node_colors, edge_color = edge_colors, edge_width=int(0.5/minwidth)*comm_graph.es['edgewidth'], edge_arrow_size = 0.5, layout='kk', dpi=300, bbox = bbox, margin=(80,80,80,80))
+    bbox = BoundingBox(600, 600)
     ig.plot(comm_graph, fn, vertex_size = partition.sizes(), vertex_label = comm_graph.vs['labels'], vertex_label_dist = 2, vertex_color = node_colors, edge_color = edge_colors, edge_width=1, edge_arrow_size = 0.5, layout='kk', dpi=300, bbox = bbox, margin=(80,80,80,80))
 
 
